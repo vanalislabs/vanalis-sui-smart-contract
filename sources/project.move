@@ -1,13 +1,10 @@
+
 module vanalis::project {
-    use sui::object::{Self, UID};
-    use sui::tx_context::{Self, TxContext};
-    use sui::transfer;
     use sui::event;
     use sui::coin::{Coin, Self};
     use sui::balance::{Self, Balance};
     use sui::table::{Self, Table};
-    use std::vector;
-    use std::string::{Self, String};
+    use vanalis::royalty;
 
     const E_NOT_CREATOR: u64 = 1;
     const E_INVALID_STATUS: u64 = 2;
@@ -17,95 +14,78 @@ module vanalis::project {
     const E_DEADLINE_PASSED: u64 = 6;
     const E_INVALID_AMOUNT: u64 = 7;
     const E_INVALID_ADDRESS: u64 = 8;
-
-    // ============= TYPES =============
+    const E_NOT_DATA_OWNER: u64 = 9;
+    const E_DATASET_ALREADY_LISTED: u64 = 10;
+    const E_DATASET_ALREADY_MINTED: u64 = 11;
     
-    /// Status codes for projects
     const STATUS_DRAFT: u8 = 0;
     const STATUS_OPEN: u8 = 1;
     const STATUS_COMPLETED: u8 = 2;
     const STATUS_PUBLISHED: u8 = 3;
 
-    /// Status codes for submissions
     const SUBMISSION_PENDING: u8 = 0;
     const SUBMISSION_APPROVED: u8 = 1;
     const SUBMISSION_REJECTED: u8 = 2;
 
-    // ============= STRUCTS =============
-
-    /// Global state tracker
     public struct ProjectRegistry has key {
         id: UID,
         total_projects: u64,
         projects: Table<u64, address>, // project_id -> creator address
     }
 
-    /// Main data collection project
     public struct Project has key {
         id: UID,
         project_id: u64,
         curator: address,
         
-        // Project metadata
-        title: String,
-        description: String,
-        data_type: String,
-        quality_criteria: String,
+        data_type_hash: vector<u8>, // Hash of off-chain metadata
+        criteria_hash: vector<u8>,  // Hash of quality criteria
         
-        // Reward management
         reward_pool: Balance<sui::sui::SUI>,
         total_reward_pool: u64,
         reward_per_submission: u64,
         rewards_paid_out: u64,
         
-        // Project targets
         target_submissions: u64,
         min_quality_score: u8,
         
-        // Status tracking
         status: u8,
         submissions_count: u64,
         approved_count: u64,
         rejected_count: u64,
         
-        // Final dataset
-        final_dataset_blob_id: vector<u8>,
+        // Final dataset reference
+        final_dataset_hash: vector<u8>, // Hash of final dataset metadata
         final_dataset_price: u64,
         
-        // Timestamps
         created_at: u64,
         deadline: u64,
     }
 
-    /// Individual data submission
     public struct Submission has key {
         id: UID,
         submission_id: u64,
         project_id: u64,
         contributor: address,
         
-        // Walrus blob IDs
+        // Walrus blob references
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
         total_items: u64,
         preview_items: u64,
         
-        metadata: String,
+        metadata_hash: vector<u8>, // Hash of off-chain metadata
         
-        // Validation
         status: u8,
         quality_score: u8,
-        reviewer_notes: String,
         
-        // Payment tracking
         reward_paid: u64,
         
-        // Timestamps
         submitted_at: u64,
         reviewed_at: u64,
+        dataset_minted: bool,
     }
 
-    /// Contributor statistics
     public struct ContributorStats has key {
         id: UID,
         project_id: u64,
@@ -115,11 +95,29 @@ module vanalis::project {
         total_earned: u64,
     }
 
-    // ============= EVENTS =============
+    public struct Dataset has key, store {
+        id: UID,
+        project_id: u64,
+        submission_id: u64,
+        curator: address,
+        creator: address,
+        dataset_hash: vector<u8>,
+        price_usdc: u64,
+        full_dataset_blob_id: vector<u8>,
+        preview_blob_id: vector<u8>,
+        metadata_hash: vector<u8>,
+        listed: bool,
+        created_at: u64,
+        last_sale_epoch: u64,
+    }
+
+    // EVENTS
 
     public struct ProjectCreatedEvent has copy, drop {
         project_id: u64,
         curator: address,
+        data_type_hash: vector<u8>,
+        criteria_hash: vector<u8>,
         reward_pool: u64,
         target_submissions: u64,
         timestamp: u64,
@@ -129,6 +127,7 @@ module vanalis::project {
         project_id: u64,
         submission_id: u64,
         contributor: address,
+        metadata_hash: vector<u8>,
         total_items: u64,
         timestamp: u64,
     }
@@ -143,33 +142,40 @@ module vanalis::project {
 
     public struct ProjectPublishedEvent has copy, drop {
         project_id: u64,
-        final_dataset_blob_id: vector<u8>,
+        final_dataset_hash: vector<u8>,
         price: u64,
         total_contributors: u64,
         timestamp: u64,
     }
 
-    // ============= INITIALIZATION =============
-
-    /// Initialize project registry (call once)
-    fun init(ctx: &mut TxContext) {
-        let registry = ProjectRegistry {
-            id: object::new(ctx),
-            total_projects: 0,
-            projects: table::new(ctx),
-        };
-        transfer::share_object(registry);
+    public struct DatasetMintedEvent has copy, drop {
+        project_id: u64,
+        submission_id: u64,
+        dataset_hash: vector<u8>,
+        creator: address,
+        price_usdc: u64,
+        timestamp: u64,
     }
 
-    // ============= PROJECT CREATION =============
+    /// Init project registry
+fun init(ctx: &mut TxContext) {
+    let registry = ProjectRegistry {
+        id: object::new(ctx),
+        total_projects: 0,
+        projects: table::new(ctx),
+    };
+    transfer::share_object(registry);
+}
 
-    /// Create new data collection project
-    public entry fun create_project(
+#[test_only]
+public fun init_for_testing(ctx: &mut TxContext) {
+    init(ctx);
+}
+
+    public fun create_project(
         registry: &mut ProjectRegistry,
-        title: String,
-        description: String,
-        data_type: String,
-        quality_criteria: String,
+        data_type_hash: vector<u8>,
+        criteria_hash: vector<u8>,
         reward_coin: Coin<sui::sui::SUI>,
         reward_per_submission: u64,
         target_submissions: u64,
@@ -177,10 +183,11 @@ module vanalis::project {
         deadline_epochs: u64,
         ctx: &mut TxContext
     ) {
-        // Validate inputs
         assert!(reward_per_submission > 0, E_INVALID_AMOUNT);
         assert!(target_submissions > 0, E_INVALID_AMOUNT);
         assert!(min_quality_score > 0, E_INVALID_AMOUNT);
+        assert!(vector::length(&data_type_hash) > 0, E_INVALID_AMOUNT);
+        assert!(vector::length(&criteria_hash) > 0, E_INVALID_AMOUNT);
 
         let reward_amount = coin::value(&reward_coin);
         let expected_total = reward_per_submission * target_submissions;
@@ -196,10 +203,8 @@ module vanalis::project {
             project_id,
             curator: creator,
             
-            title,
-            description,
-            data_type,
-            quality_criteria,
+            data_type_hash,
+            criteria_hash,
             
             reward_pool: coin::into_balance(reward_coin),
             total_reward_pool: reward_amount,
@@ -214,21 +219,21 @@ module vanalis::project {
             approved_count: 0,
             rejected_count: 0,
             
-            final_dataset_blob_id: vector::empty(),
+            final_dataset_hash: vector::empty(),
             final_dataset_price: 0,
             
             created_at: current_epoch,
             deadline: current_epoch + deadline_epochs,
         };
 
-        // Update registry
         registry.total_projects = project_id;
         table::add(&mut registry.projects, project_id, creator);
 
-        // Emit event
         event::emit(ProjectCreatedEvent {
             project_id,
             curator: creator,
+            data_type_hash: project.data_type_hash,
+            criteria_hash: project.criteria_hash,
             reward_pool: reward_amount,
             target_submissions,
             timestamp: current_epoch,
@@ -237,26 +242,22 @@ module vanalis::project {
         transfer::share_object(project);
     }
 
-    // ============= SUBMISSION MANAGEMENT =============
-
-    /// Submit data to project
-    public entry fun submit_data(
+    public fun submit_data(
         project: &mut Project,
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
         total_items: u64,
         preview_items: u64,
-        metadata: String,
+        metadata_hash: vector<u8>,
         ctx: &mut TxContext
     ) {
-        // Validate project status
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(tx_context::epoch(ctx) < project.deadline, E_DEADLINE_PASSED);
         
-        // Validate inputs
         assert!(total_items > 0, E_INVALID_AMOUNT);
         assert!(preview_items > 0, E_INVALID_AMOUNT);
         assert!(preview_items <= total_items, E_INVALID_AMOUNT);
+        assert!(vector::length(&metadata_hash) > 0, E_INVALID_AMOUNT);
 
         let submission_id = project.submissions_count + 1;
         let contributor = tx_context::sender(ctx);
@@ -273,26 +274,25 @@ module vanalis::project {
             total_items,
             preview_items,
             
-            metadata,
+            metadata_hash,
             
             status: SUBMISSION_PENDING,
             quality_score: 0,
-            reviewer_notes: string::utf8(b""),
             
             reward_paid: 0,
             
             submitted_at: current_epoch,
             reviewed_at: 0,
+            dataset_minted: false,
         };
 
-        // Update project counters
         project.submissions_count = project.submissions_count + 1;
 
-        // Emit event
         event::emit(SubmissionReceivedEvent {
             project_id: project.project_id,
             submission_id,
             contributor,
+            metadata_hash: copy metadata_hash,
             total_items,
             timestamp: current_epoch,
         });
@@ -311,29 +311,21 @@ module vanalis::project {
         transfer::share_object(stats);
     }
 
-    /// Review submission (curator only)
-    public entry fun review_submission(
+    public fun review_submission(
         project: &mut Project,
         submission: &mut Submission,
         stats: &mut ContributorStats,
         approve: bool,
         quality_score: u8,
-        reviewer_notes: String,
         ctx: &mut TxContext
     ) {
-        // Verify curator
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
-        
-        // Verify submission is pending
         assert!(submission.status == SUBMISSION_PENDING, E_INVALID_STATUS);
-        
-        // Validate quality score
         assert!(quality_score <= 100, E_INVALID_AMOUNT);
 
         let current_epoch = tx_context::epoch(ctx);
         submission.reviewed_at = current_epoch;
         submission.quality_score = quality_score;
-        submission.reviewer_notes = reviewer_notes;
 
         if (approve && quality_score >= project.min_quality_score) {
             // APPROVE: Transfer reward to contributor
@@ -348,7 +340,6 @@ module vanalis::project {
             // Transfer to contributor
             transfer::public_transfer(reward_coin, submission.contributor);
             
-            // Update tracking
             submission.reward_paid = project.reward_per_submission;
             project.rewards_paid_out = project.rewards_paid_out + project.reward_per_submission;
             project.approved_count = project.approved_count + 1;
@@ -378,42 +369,74 @@ module vanalis::project {
         }
     }
 
-    // ============= PROJECT PUBLISHING =============
-
-    /// Publish project to marketplace
-    public entry fun publish_project(
+    public fun mint_dataset_from_submission(
         project: &mut Project,
-        final_dataset_blob_id: vector<u8>,
+        submission: &mut Submission,
+        royalty_manager: &mut royalty::RoyaltyManager,
+        dataset_hash: vector<u8>,
         price_usdc: u64,
         ctx: &mut TxContext
     ) {
-        // Verify curator
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
-        
-        // Verify project is open
-        assert!(project.status == STATUS_OPEN, E_INVALID_STATUS);
-        
-        // Validate inputs
-        assert!(vector::length(&final_dataset_blob_id) > 0, E_INVALID_AMOUNT);
+        assert!(submission.project_id == project.project_id, E_INVALID_STATUS);
+        assert!(submission.status == SUBMISSION_APPROVED, E_INVALID_STATUS);
+        assert!(!submission.dataset_minted, E_DATASET_ALREADY_MINTED);
+        assert!(vector::length(&dataset_hash) > 0, E_INVALID_AMOUNT);
         assert!(price_usdc > 0, E_INVALID_AMOUNT);
 
+        submission.dataset_minted = true;
         project.status = STATUS_PUBLISHED;
-        project.final_dataset_blob_id = final_dataset_blob_id;
+        project.final_dataset_hash = copy dataset_hash;
         project.final_dataset_price = price_usdc;
 
         let current_epoch = tx_context::epoch(ctx);
 
+        let dataset = Dataset {
+            id: object::new(ctx),
+            project_id: project.project_id,
+            submission_id: submission.submission_id,
+            curator: project.curator,
+            creator: submission.contributor,
+            dataset_hash: copy dataset_hash,
+            price_usdc,
+            full_dataset_blob_id: submission.full_dataset_blob_id,
+            preview_blob_id: submission.preview_blob_id,
+            metadata_hash: submission.metadata_hash,
+            listed: false,
+            created_at: current_epoch,
+            last_sale_epoch: 0,
+        };
+
+        transfer::public_transfer(dataset, submission.contributor);
+
+        royalty::create_royalty_config(
+            royalty_manager,
+            copy dataset_hash,
+            submission.contributor,
+            project.curator,
+            ctx
+        );
+
+        event::emit(DatasetMintedEvent {
+            project_id: project.project_id,
+            submission_id: submission.submission_id,
+            dataset_hash: copy dataset_hash,
+            creator: submission.contributor,
+            price_usdc,
+            timestamp: current_epoch,
+        });
+
         event::emit(ProjectPublishedEvent {
             project_id: project.project_id,
-            final_dataset_blob_id,
+            final_dataset_hash: dataset_hash,
             price: price_usdc,
             total_contributors: project.approved_count,
             timestamp: current_epoch,
         });
     }
 
-    /// Withdraw remaining rewards (cleanup)
-    public entry fun withdraw_remaining_rewards(
+    /// Withdraw remaining reward for Curator
+    public fun withdraw_remaining_rewards(
         project: &mut Project,
         ctx: &mut TxContext
     ) {
@@ -426,7 +449,7 @@ module vanalis::project {
         }
     }
 
-    // ============= QUERY FUNCTIONS (View-only) =============
+    // GET FUNCTION
 
     public fun get_project_status(project: &Project): u8 {
         project.status
@@ -436,10 +459,10 @@ module vanalis::project {
         submission.status
     }
 
-    public fun get_project_info(project: &Project): (String, String, u64, u64, u64) {
+    public fun get_project_info(project: &Project): (vector<u8>, vector<u8>, u64, u64, u64) {
         (
-            project.title,
-            project.description,
+            project.data_type_hash,
+            project.criteria_hash,
             project.submissions_count,
             project.approved_count,
             project.total_reward_pool,
@@ -450,8 +473,8 @@ module vanalis::project {
         (stats.submissions_count, stats.approved_count, stats.total_earned)
     }
 
-    public fun get_submission_info(submission: &Submission): (address, u64, u64, u8) {
-        (submission.contributor, submission.total_items, submission.reward_paid, submission.status)
+    public fun get_submission_info(submission: &Submission): (address, u64, u64, u8, vector<u8>) {
+        (submission.contributor, submission.total_items, submission.reward_paid, submission.status, submission.metadata_hash)
     }
 
     public fun get_reward_pool_balance(project: &Project): u64 {
@@ -468,5 +491,73 @@ module vanalis::project {
 
     public fun get_final_dataset_price(project: &Project): u64 {
         project.final_dataset_price
+    }
+
+    public fun get_final_dataset_hash(project: &Project): vector<u8> {
+        project.final_dataset_hash
+    }
+
+    public fun get_data_type_hash(project: &Project): vector<u8> {
+        project.data_type_hash
+    }
+
+    public fun get_criteria_hash(project: &Project): vector<u8> {
+        project.criteria_hash
+    }
+
+    public fun get_submission_metadata_hash(submission: &Submission): vector<u8> {
+        submission.metadata_hash
+    }
+
+    public fun get_full_dataset_blob_id(submission: &Submission): vector<u8> {
+        submission.full_dataset_blob_id
+    }
+
+    public fun get_preview_blob_id(submission: &Submission): vector<u8> {
+        submission.preview_blob_id
+    }
+
+    public fun assert_dataset_owner(dataset: &Dataset, signer: address) {
+        assert!(dataset.creator == signer, E_NOT_DATA_OWNER);
+    }
+
+    public fun is_dataset_listed(dataset: &Dataset): bool {
+        dataset.listed
+    }
+
+    public fun mark_dataset_listed(dataset: &mut Dataset, listed: bool) {
+        dataset.listed = listed;
+    }
+
+    public fun get_dataset_hash(dataset: &Dataset): vector<u8> {
+        copy dataset.dataset_hash
+    }
+
+    public fun get_dataset_price_usdc(dataset: &Dataset): u64 {
+        dataset.price_usdc
+    }
+
+    public fun get_dataset_project(dataset: &Dataset): u64 {
+        dataset.project_id
+    }
+
+    public fun get_dataset_curator(dataset: &Dataset): address {
+        dataset.curator
+    }
+
+    public fun get_dataset_blob_refs(dataset: &Dataset): (vector<u8>, vector<u8>, vector<u8>) {
+        (copy dataset.full_dataset_blob_id, copy dataset.preview_blob_id, copy dataset.metadata_hash)
+    }
+
+    public fun touch_dataset_sale(dataset: &mut Dataset, epoch: u64) {
+        dataset.last_sale_epoch = epoch;
+    }
+
+    public fun get_dataset_submission(dataset: &Dataset): u64 {
+        dataset.submission_id
+    }
+
+    public fun get_dataset_object_address(dataset: &Dataset): address {
+        object::uid_to_address(&dataset.id)
     }
 }
