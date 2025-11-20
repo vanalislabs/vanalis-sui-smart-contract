@@ -52,11 +52,11 @@ module vanalis::project {
         rewards_paid_out: u64,
         
         target_submissions: u64,
-        
         status: u8,
         submissions_count: u64,
         approved_count: u64,
         rejected_count: u64,
+        contributor_stats: Table<address, ContributorStats>,
         
         created_at: u64,
         deadline: u64,
@@ -80,10 +80,7 @@ module vanalis::project {
         reviewed_at: u64,
     }
 
-    public struct ContributorStats has key {
-        id: UID,
-        project_id: u64,
-        contributor: address,
+    public struct ContributorStats has store {
         submissions_count: u64,
         approved_count: u64,
         total_earned: u64,
@@ -116,7 +113,14 @@ module vanalis::project {
         category: String,
         image_url: String,
         reward_pool: u64,
+        
         target_submissions: u64,
+        
+        status: u8,
+        submissions_count: u64,
+        approved_count: u64,
+        rejected_count: u64,
+        
         created_at: u64,
         deadline: u64,
     }
@@ -204,6 +208,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
             submissions_count: 0,
             approved_count: 0,
             rejected_count: 0,
+            contributor_stats: table::new<address, ContributorStats>(ctx),
             
             created_at: current_timestamp,            
             deadline,
@@ -223,6 +228,10 @@ public fun init_for_testing(ctx: &mut TxContext) {
             image_url: project.image_url,
             reward_pool: reward_amount,
             target_submissions,
+            status: project.status,
+            submissions_count: project.submissions_count,
+            approved_count: project.approved_count,
+            rejected_count: project.rejected_count,
             created_at: current_timestamp,
             deadline,
         });
@@ -266,54 +275,64 @@ public fun init_for_testing(ctx: &mut TxContext) {
             project_id: project.project_id,
             submission_id,
             contributor,
-            // total_items,
             timestamp: current_timestamp,
         });
 
-        // Create contributor stats
-        let stats = ContributorStats {
-            id: object::new(ctx),
-            project_id: project.project_id,
-            contributor,
-            submissions_count: 1,
-            approved_count: 0,
-            total_earned: 0,
+        if(table::contains(&project.contributor_stats, contributor)) {
+            let stats_ref = table::borrow_mut(&mut project.contributor_stats, contributor);
+            stats_ref.submissions_count = stats_ref.submissions_count + 1;
+        } else {
+            let stats = ContributorStats {
+                submissions_count: 1,
+                approved_count: 0,
+                total_earned: 0,
+            };
+            table::add(&mut project.contributor_stats, contributor, stats);
         };
 
         transfer::share_object(submission);
-        transfer::share_object(stats);
     }
 
     public fun review_submission(
         project: &mut Project,
         submission: &mut Submission,
-        stats: &mut ContributorStats,
         approve: bool,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
         assert!(submission.status == SUBMISSION_PENDING, E_INVALID_STATUS);
 
         let current_timestamp = clock.timestamp_ms();
         submission.reviewed_at = current_timestamp;
 
+        let contributor = submission.contributor;
+
+        if (!table::contains(&project.contributor_stats, contributor)) {
+            let stats = ContributorStats {
+                submissions_count: 0,
+                approved_count: 0,
+                total_earned: 0,
+            };
+            table::add(&mut project.contributor_stats, contributor, stats);
+        };
+        let stats_ref = table::borrow_mut(&mut project.contributor_stats, contributor);
+
         if (approve) {
-            // APPROVE: Transfer reward to contributor
             submission.status = SUBMISSION_APPROVED;
 
             let reward_coin = withdraw(&mut project.reward_pool, project.reward_per_submission);
             let collected_coin = coin::from_balance(reward_coin, ctx);
             
-            // Transfer to contributor
-            transfer::public_transfer(collected_coin, submission.contributor);
+            transfer::public_transfer(collected_coin, contributor);
             
             submission.reward_paid = project.reward_per_submission;
             project.rewards_paid_out = project.rewards_paid_out + project.reward_per_submission;
             project.approved_count = project.approved_count + 1;
             
-            stats.approved_count = stats.approved_count + 1;
-            stats.total_earned = stats.total_earned + project.reward_per_submission;
+            stats_ref.approved_count = stats_ref.approved_count + 1;
+            stats_ref.total_earned = stats_ref.total_earned + project.reward_per_submission;
 
             event::emit(SubmissionReviewedEvent {
                 submission_id: submission.submission_id,
@@ -321,8 +340,11 @@ public fun init_for_testing(ctx: &mut TxContext) {
                 reward_paid: project.reward_per_submission,
                 timestamp: current_timestamp,
             });
+
+            if(project.target_submissions <= stats_ref.approved_count){
+               project.status = STATUS_COMPLETED; 
+            }
         } else {
-            // REJECT
             submission.status = SUBMISSION_REJECTED;
             project.rejected_count = project.rejected_count + 1;
 
@@ -348,6 +370,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
         let remaining_coin = withdraw(&mut project.reward_pool, remaining);
         let withdraw_coin = coin::from_balance(remaining_coin, ctx);
         transfer::public_transfer(withdraw_coin, project.curator);
+        project.status = STATUS_COMPLETED; 
     }
 
     // GET FUNCTION
