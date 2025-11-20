@@ -13,7 +13,6 @@ module vanalis::protocol_tests {
 
     const REWARD_PER_SUBMISSION: u64 = 100;
     const TARGET_SUBMISSIONS: u64 = 5;
-    const MIN_QUALITY: u8 = 70;
     const DEFAULT_DEADLINE: u64 = 5;
     const LISTING_PRICE: u64 = 900;
     const DATASET_PRICE_USDC: u64 = 600;
@@ -57,7 +56,7 @@ module vanalis::protocol_tests {
         setup_all_modules(&mut scenario);
         create_project_with_deadline(&mut scenario, DEFAULT_DEADLINE);
         contributor_submit_default(&mut scenario);
-        curator_review_latest(&mut scenario, true, 90);
+        curator_review_latest(&mut scenario, true);
         mint_dataset_default(&mut scenario, DATASET_PRICE_USDC);
         set_oracle_price_default(&mut scenario, LISTING_PRICE);
 
@@ -108,7 +107,7 @@ module vanalis::protocol_tests {
         setup_all_modules(ts);
         create_project_with_deadline(ts, DEFAULT_DEADLINE);
         contributor_submit_default(ts);
-        curator_review_latest(ts, true, 90);
+        curator_review_latest(ts, true);
         mint_dataset_default(ts, DATASET_PRICE_USDC);
         set_oracle_price_default(ts, LISTING_PRICE);
         list_dataset(ts);
@@ -137,7 +136,6 @@ module vanalis::protocol_tests {
             reward_coin,
             REWARD_PER_SUBMISSION,
             TARGET_SUBMISSIONS,
-            MIN_QUALITY,
             deadline_epochs,
             ts::ctx(ts),
         );
@@ -161,7 +159,7 @@ module vanalis::protocol_tests {
         ts::next_tx(ts, CURATOR);
     }
 
-    fun curator_review_latest(ts: &mut ts::Scenario, approve: bool, quality: u8) {
+    fun curator_review_latest(ts: &mut ts::Scenario, approve: bool) {
         ts::next_tx(ts, CURATOR);
         let mut proj = ts::take_shared<project::Project>(ts);
         let mut submission = ts::take_shared<project::Submission>(ts);
@@ -171,7 +169,6 @@ module vanalis::protocol_tests {
             &mut submission,
             &mut stats,
             approve,
-            quality,
             ts::ctx(ts),
         );
         ts::return_shared(proj);
@@ -185,14 +182,6 @@ module vanalis::protocol_tests {
         let mut proj = ts::take_shared<project::Project>(ts);
         let mut submission = ts::take_shared<project::Submission>(ts);
         let mut manager = ts::take_shared<royalty::RoyaltyManager>(ts);
-        project::mint_dataset_from_submission(
-            &mut proj,
-            &mut submission,
-            &mut manager,
-            dataset_hash(),
-            price_usdc,
-            ts::ctx(ts),
-        );
         ts::return_shared(proj);
         ts::return_shared(submission);
         ts::return_shared(manager);

@@ -4,6 +4,9 @@ module vanalis::project {
     use sui::coin::{Coin, Self};
     use sui::balance::{Self, Balance};
     use sui::table::{Self, Table};
+    use std::string;
+    use std::string::String;
+    use sui::clock::Clock;
     use vanalis::royalty;
 
     const E_NOT_CREATOR: u64 = 1;
@@ -16,7 +19,6 @@ module vanalis::project {
     const E_INVALID_ADDRESS: u64 = 8;
     const E_NOT_DATA_OWNER: u64 = 9;
     const E_DATASET_ALREADY_LISTED: u64 = 10;
-    const E_DATASET_ALREADY_MINTED: u64 = 11;
     
     const STATUS_DRAFT: u8 = 0;
     const STATUS_OPEN: u8 = 1;
@@ -37,9 +39,11 @@ module vanalis::project {
         id: UID,
         project_id: u64,
         curator: address,
-        
-        data_type_hash: vector<u8>, // Hash of off-chain metadata
-        criteria_hash: vector<u8>,  // Hash of quality criteria
+        title: String,
+        description: String,
+        submission_requirements: vector<String>,
+        data_type: String,
+        category: String,
         
         reward_pool: Balance<sui::sui::SUI>,
         total_reward_pool: u64,
@@ -47,16 +51,11 @@ module vanalis::project {
         rewards_paid_out: u64,
         
         target_submissions: u64,
-        min_quality_score: u8,
         
         status: u8,
         submissions_count: u64,
         approved_count: u64,
         rejected_count: u64,
-        
-        // Final dataset reference
-        final_dataset_hash: vector<u8>, // Hash of final dataset metadata
-        final_dataset_price: u64,
         
         created_at: u64,
         deadline: u64,
@@ -71,19 +70,13 @@ module vanalis::project {
         // Walrus blob references
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        total_items: u64,
-        preview_items: u64,
-        
-        metadata_hash: vector<u8>, // Hash of off-chain metadata
         
         status: u8,
-        quality_score: u8,
         
         reward_paid: u64,
         
         submitted_at: u64,
         reviewed_at: u64,
-        dataset_minted: bool,
     }
 
     public struct ContributorStats has key {
@@ -105,7 +98,6 @@ module vanalis::project {
         price_usdc: u64,
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        metadata_hash: vector<u8>,
         listed: bool,
         created_at: u64,
         last_sale_epoch: u64,
@@ -116,44 +108,28 @@ module vanalis::project {
     public struct ProjectCreatedEvent has copy, drop {
         project_id: u64,
         curator: address,
-        data_type_hash: vector<u8>,
-        criteria_hash: vector<u8>,
+        title: String,
+        description: String,
+        submission_requirements: vector<String>,
+        data_type: String,
+        category: String,
         reward_pool: u64,
         target_submissions: u64,
-        timestamp: u64,
+        created_at: u64,
+        deadline: u64,
     }
 
     public struct SubmissionReceivedEvent has copy, drop {
         project_id: u64,
         submission_id: u64,
         contributor: address,
-        metadata_hash: vector<u8>,
-        total_items: u64,
         timestamp: u64,
     }
 
     public struct SubmissionReviewedEvent has copy, drop {
         submission_id: u64,
         approved: bool,
-        quality_score: u8,
         reward_paid: u64,
-        timestamp: u64,
-    }
-
-    public struct ProjectPublishedEvent has copy, drop {
-        project_id: u64,
-        final_dataset_hash: vector<u8>,
-        price: u64,
-        total_contributors: u64,
-        timestamp: u64,
-    }
-
-    public struct DatasetMintedEvent has copy, drop {
-        project_id: u64,
-        submission_id: u64,
-        dataset_hash: vector<u8>,
-        creator: address,
-        price_usdc: u64,
         timestamp: u64,
     }
 
@@ -174,20 +150,25 @@ public fun init_for_testing(ctx: &mut TxContext) {
 
     public fun create_project(
         registry: &mut ProjectRegistry,
-        data_type_hash: vector<u8>,
-        criteria_hash: vector<u8>,
+        title: String,
+        description: String,
+        submission_requirements: vector<String>,
+        data_type: String,
+        category: String,
         reward_coin: Coin<sui::sui::SUI>,
         reward_per_submission: u64,
         target_submissions: u64,
-        min_quality_score: u8,
-        deadline_epochs: u64,
+        deadline: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
+        assert!(!string::is_empty(&title), E_INVALID_AMOUNT);
+        assert!(!string::is_empty(&description), E_INVALID_AMOUNT);
+        assert!(!string::is_empty(&data_type), E_INVALID_AMOUNT);
+        assert!(!string::is_empty(&category), E_INVALID_AMOUNT);
         assert!(reward_per_submission > 0, E_INVALID_AMOUNT);
         assert!(target_submissions > 0, E_INVALID_AMOUNT);
-        assert!(min_quality_score > 0, E_INVALID_AMOUNT);
-        assert!(vector::length(&data_type_hash) > 0, E_INVALID_AMOUNT);
-        assert!(vector::length(&criteria_hash) > 0, E_INVALID_AMOUNT);
+        assert!(deadline > clock.timestamp_ms(), E_INVALID_AMOUNT);
 
         let reward_amount = coin::value(&reward_coin);
         let expected_total = reward_per_submission * target_submissions;
@@ -196,15 +177,17 @@ public fun init_for_testing(ctx: &mut TxContext) {
 
         let project_id = registry.total_projects + 1;
         let creator = tx_context::sender(ctx);
-        let current_epoch = tx_context::epoch(ctx);
+        let current_timestamp = clock.timestamp_ms();
 
         let project = Project {
             id: object::new(ctx),
             project_id,
             curator: creator,
-            
-            data_type_hash,
-            criteria_hash,
+            title,
+            description,
+            submission_requirements,
+            data_type,
+            category,
             
             reward_pool: coin::into_balance(reward_coin),
             total_reward_pool: reward_amount,
@@ -212,18 +195,14 @@ public fun init_for_testing(ctx: &mut TxContext) {
             rewards_paid_out: 0,
             
             target_submissions,
-            min_quality_score,
             
             status: STATUS_OPEN,
             submissions_count: 0,
             approved_count: 0,
             rejected_count: 0,
             
-            final_dataset_hash: vector::empty(),
-            final_dataset_price: 0,
-            
-            created_at: current_epoch,
-            deadline: current_epoch + deadline_epochs,
+            created_at: current_timestamp,            
+            deadline,
         };
 
         registry.total_projects = project_id;
@@ -232,11 +211,15 @@ public fun init_for_testing(ctx: &mut TxContext) {
         event::emit(ProjectCreatedEvent {
             project_id,
             curator: creator,
-            data_type_hash: project.data_type_hash,
-            criteria_hash: project.criteria_hash,
+            title: project.title,
+            description: project.description,
+            submission_requirements: project.submission_requirements,
+            data_type: project.data_type,
+            category: project.category,
             reward_pool: reward_amount,
             target_submissions,
-            timestamp: current_epoch,
+            created_at: current_timestamp,
+            deadline,
         });
 
         transfer::share_object(project);
@@ -244,24 +227,16 @@ public fun init_for_testing(ctx: &mut TxContext) {
 
     public fun submit_data(
         project: &mut Project,
-        full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        total_items: u64,
-        preview_items: u64,
-        metadata_hash: vector<u8>,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(tx_context::epoch(ctx) < project.deadline, E_DEADLINE_PASSED);
         
-        assert!(total_items > 0, E_INVALID_AMOUNT);
-        assert!(preview_items > 0, E_INVALID_AMOUNT);
-        assert!(preview_items <= total_items, E_INVALID_AMOUNT);
-        assert!(vector::length(&metadata_hash) > 0, E_INVALID_AMOUNT);
-
         let submission_id = project.submissions_count + 1;
         let contributor = tx_context::sender(ctx);
-        let current_epoch = tx_context::epoch(ctx);
+        let current_timestamp = clock.timestamp_ms();
 
         let submission = Submission {
             id: object::new(ctx),
@@ -269,21 +244,15 @@ public fun init_for_testing(ctx: &mut TxContext) {
             project_id: project.project_id,
             contributor,
             
-            full_dataset_blob_id,
+            full_dataset_blob_id: b"",
             preview_blob_id,
-            total_items,
-            preview_items,
-            
-            metadata_hash,
-            
+                        
             status: SUBMISSION_PENDING,
-            quality_score: 0,
             
             reward_paid: 0,
             
-            submitted_at: current_epoch,
+            submitted_at: current_timestamp,
             reviewed_at: 0,
-            dataset_minted: false,
         };
 
         project.submissions_count = project.submissions_count + 1;
@@ -292,9 +261,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
             project_id: project.project_id,
             submission_id,
             contributor,
-            metadata_hash: copy metadata_hash,
-            total_items,
-            timestamp: current_epoch,
+            // total_items,
+            timestamp: current_timestamp,
         });
 
         // Create contributor stats
@@ -316,29 +284,24 @@ public fun init_for_testing(ctx: &mut TxContext) {
         submission: &mut Submission,
         stats: &mut ContributorStats,
         approve: bool,
-        quality_score: u8,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
         assert!(submission.status == SUBMISSION_PENDING, E_INVALID_STATUS);
-        assert!(quality_score <= 100, E_INVALID_AMOUNT);
 
-        let current_epoch = tx_context::epoch(ctx);
-        submission.reviewed_at = current_epoch;
-        submission.quality_score = quality_score;
+        let current_timestamp = clock.timestamp_ms();
+        submission.reviewed_at = current_timestamp;
 
-        if (approve && quality_score >= project.min_quality_score) {
+        if (approve) {
             // APPROVE: Transfer reward to contributor
             submission.status = SUBMISSION_APPROVED;
-            
-            let reward_coin = coin::take(
-                &mut project.reward_pool,
-                project.reward_per_submission,
-                ctx
-            );
+
+            let reward_coin = withdraw(&mut project.reward_pool, project.reward_per_submission);
+            let collected_coin = coin::from_balance(reward_coin, ctx);
             
             // Transfer to contributor
-            transfer::public_transfer(reward_coin, submission.contributor);
+            transfer::public_transfer(collected_coin, submission.contributor);
             
             submission.reward_paid = project.reward_per_submission;
             project.rewards_paid_out = project.rewards_paid_out + project.reward_per_submission;
@@ -350,9 +313,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
             event::emit(SubmissionReviewedEvent {
                 submission_id: submission.submission_id,
                 approved: true,
-                quality_score,
                 reward_paid: project.reward_per_submission,
-                timestamp: current_epoch,
+                timestamp: current_timestamp,
             });
         } else {
             // REJECT
@@ -362,77 +324,10 @@ public fun init_for_testing(ctx: &mut TxContext) {
             event::emit(SubmissionReviewedEvent {
                 submission_id: submission.submission_id,
                 approved: false,
-                quality_score,
                 reward_paid: 0,
-                timestamp: current_epoch,
+                timestamp: current_timestamp,
             });
         }
-    }
-
-    public fun mint_dataset_from_submission(
-        project: &mut Project,
-        submission: &mut Submission,
-        royalty_manager: &mut royalty::RoyaltyManager,
-        dataset_hash: vector<u8>,
-        price_usdc: u64,
-        ctx: &mut TxContext
-    ) {
-        assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
-        assert!(submission.project_id == project.project_id, E_INVALID_STATUS);
-        assert!(submission.status == SUBMISSION_APPROVED, E_INVALID_STATUS);
-        assert!(!submission.dataset_minted, E_DATASET_ALREADY_MINTED);
-        assert!(vector::length(&dataset_hash) > 0, E_INVALID_AMOUNT);
-        assert!(price_usdc > 0, E_INVALID_AMOUNT);
-
-        submission.dataset_minted = true;
-        project.status = STATUS_PUBLISHED;
-        project.final_dataset_hash = copy dataset_hash;
-        project.final_dataset_price = price_usdc;
-
-        let current_epoch = tx_context::epoch(ctx);
-
-        let dataset = Dataset {
-            id: object::new(ctx),
-            project_id: project.project_id,
-            submission_id: submission.submission_id,
-            curator: project.curator,
-            creator: submission.contributor,
-            dataset_hash: copy dataset_hash,
-            price_usdc,
-            full_dataset_blob_id: submission.full_dataset_blob_id,
-            preview_blob_id: submission.preview_blob_id,
-            metadata_hash: submission.metadata_hash,
-            listed: false,
-            created_at: current_epoch,
-            last_sale_epoch: 0,
-        };
-
-        transfer::public_transfer(dataset, submission.contributor);
-
-        royalty::create_royalty_config(
-            royalty_manager,
-            copy dataset_hash,
-            submission.contributor,
-            project.curator,
-            ctx
-        );
-
-        event::emit(DatasetMintedEvent {
-            project_id: project.project_id,
-            submission_id: submission.submission_id,
-            dataset_hash: copy dataset_hash,
-            creator: submission.contributor,
-            price_usdc,
-            timestamp: current_epoch,
-        });
-
-        event::emit(ProjectPublishedEvent {
-            project_id: project.project_id,
-            final_dataset_hash: dataset_hash,
-            price: price_usdc,
-            total_contributors: project.approved_count,
-            timestamp: current_epoch,
-        });
     }
 
     /// Withdraw remaining reward for Curator
@@ -443,10 +338,11 @@ public fun init_for_testing(ctx: &mut TxContext) {
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
         
         let remaining = balance::value(&project.reward_pool);
-        if (remaining > 0) {
-            let withdraw_coin = coin::take(&mut project.reward_pool, remaining, ctx);
-            transfer::public_transfer(withdraw_coin, project.curator);
-        }
+        assert!(remaining > 0, E_INVALID_AMOUNT);
+        
+        let remaining_coin = withdraw(&mut project.reward_pool, remaining);
+        let withdraw_coin = coin::from_balance(remaining_coin, ctx);
+        transfer::public_transfer(withdraw_coin, project.curator);
     }
 
     // GET FUNCTION
@@ -459,10 +355,10 @@ public fun init_for_testing(ctx: &mut TxContext) {
         submission.status
     }
 
-    public fun get_project_info(project: &Project): (vector<u8>, vector<u8>, u64, u64, u64) {
+    public fun get_project_info(project: &Project): (String, u64, u64, u64) {
         (
-            project.data_type_hash,
-            project.criteria_hash,
+            // project.data_type_hash,
+            project.category,
             project.submissions_count,
             project.approved_count,
             project.total_reward_pool,
@@ -473,8 +369,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         (stats.submissions_count, stats.approved_count, stats.total_earned)
     }
 
-    public fun get_submission_info(submission: &Submission): (address, u64, u64, u8, vector<u8>) {
-        (submission.contributor, submission.total_items, submission.reward_paid, submission.status, submission.metadata_hash)
+    public fun get_submission_info(submission: &Submission): (address, u64, u8) {
+        (submission.contributor, submission.reward_paid, submission.status)
     }
 
     public fun get_reward_pool_balance(project: &Project): u64 {
@@ -489,24 +385,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         project.curator
     }
 
-    public fun get_final_dataset_price(project: &Project): u64 {
-        project.final_dataset_price
-    }
-
-    public fun get_final_dataset_hash(project: &Project): vector<u8> {
-        project.final_dataset_hash
-    }
-
-    public fun get_data_type_hash(project: &Project): vector<u8> {
-        project.data_type_hash
-    }
-
-    public fun get_criteria_hash(project: &Project): vector<u8> {
-        project.criteria_hash
-    }
-
-    public fun get_submission_metadata_hash(submission: &Submission): vector<u8> {
-        submission.metadata_hash
+    public fun get_category(project: &Project): String {
+        project.category
     }
 
     public fun get_full_dataset_blob_id(submission: &Submission): vector<u8> {
@@ -545,8 +425,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         dataset.curator
     }
 
-    public fun get_dataset_blob_refs(dataset: &Dataset): (vector<u8>, vector<u8>, vector<u8>) {
-        (copy dataset.full_dataset_blob_id, copy dataset.preview_blob_id, copy dataset.metadata_hash)
+    public fun get_dataset_blob_refs(dataset: &Dataset): (vector<u8>, vector<u8>) {
+        (copy dataset.full_dataset_blob_id, copy dataset.preview_blob_id)
     }
 
     public fun touch_dataset_sale(dataset: &mut Dataset, epoch: u64) {
@@ -560,4 +440,9 @@ public fun init_for_testing(ctx: &mut TxContext) {
     public fun get_dataset_object_address(dataset: &Dataset): address {
         object::uid_to_address(&dataset.id)
     }
+
+    public fun withdraw<T>(self: &mut Balance<T>, value: u64): Balance<T> {
+        balance::split(self, value)
+    }
+
 }

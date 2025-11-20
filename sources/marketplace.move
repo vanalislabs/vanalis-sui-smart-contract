@@ -47,7 +47,7 @@ module vanalis::marketplace {
         seller: address,
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        metadata_hash: vector<u8>,
+        // metadata_hash: vector<u8>,
         active: bool,
         created_at: u64,
         updated_at: u64,
@@ -60,7 +60,7 @@ module vanalis::marketplace {
         buyer: address,
         full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        metadata_hash: vector<u8>,
+        // metadata_hash: vector<u8>,
         issued_at: u64,
     }
 
@@ -128,7 +128,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         let price_sui = pricing::require_price(oracle, copy dataset_hash);
         assert!(price_sui > 0, E_INVALID_PRICE);
 
-        let (full_blob, preview_blob, metadata_hash) = project::get_dataset_blob_refs(dataset);
+        // let (full_blob, preview_blob, metadata_hash) = project::get_dataset_blob_refs(dataset);
+        let (full_blob, preview_blob) = project::get_dataset_blob_refs(dataset);
         let dataset_address = project::get_dataset_object_address(dataset);
 
         project::mark_dataset_listed(dataset, true);
@@ -144,7 +145,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
             seller: sender,
             full_dataset_blob_id: full_blob,
             preview_blob_id: preview_blob,
-            metadata_hash,
+            // metadata_hash,
             active: true,
             created_at: tx_context::epoch(ctx),
             updated_at: tx_context::epoch(ctx),
@@ -229,7 +230,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
             buyer: tx_context::sender(ctx),
             full_dataset_blob_id: listing.full_dataset_blob_id,
             preview_blob_id: listing.preview_blob_id,
-            metadata_hash: listing.metadata_hash,
+            // metadata_hash: listing.metadata_hash,
             issued_at: current_epoch,
         };
 
