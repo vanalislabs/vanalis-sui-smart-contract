@@ -134,19 +134,19 @@ module vanalis::project {
     }
 
     /// Init project registry
-fun init(ctx: &mut TxContext) {
-    let registry = ProjectRegistry {
-        id: object::new(ctx),
-        total_projects: 0,
-        projects: table::new(ctx),
-    };
-    transfer::share_object(registry);
-}
+    fun init(ctx: &mut TxContext) {
+        let registry = ProjectRegistry {
+            id: object::new(ctx),
+            total_projects: 0,
+            projects: table::new(ctx),
+        };
+        transfer::share_object(registry);
+    }
 
-#[test_only]
-public fun init_for_testing(ctx: &mut TxContext) {
-    init(ctx);
-}
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
 
     public fun create_project(
         registry: &mut ProjectRegistry,
