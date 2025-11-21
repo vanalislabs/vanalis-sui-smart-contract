@@ -3,6 +3,8 @@ module vanalis::marketplace {
     use sui::event;
     use sui::coin::{Coin, Self};
     use sui::balance::{Self, Balance};
+    use sui::object;
+    use sui::object::ID;
     use vanalis::project;
     use vanalis::royalty;
     use vanalis::pricing;
@@ -12,6 +14,7 @@ module vanalis::marketplace {
     const E_DATASET_ALREADY_LISTED: u64 = 3;
     const E_LISTING_INACTIVE: u64 = 4;
     const E_DATASET_MISMATCH: u64 = 5;
+    const E_NOT_DATA_OWNER: u64 = 6;
 
     public struct Marketplace has key {
         id: UID,
@@ -30,7 +33,7 @@ module vanalis::marketplace {
     public struct Purchase has key {
         id: UID,
         purchase_id: u64,
-        project_id: u64,
+        project_id: ID,
         buyer: address,
         price_paid: u64,
         timestamp: u64,
@@ -38,28 +41,39 @@ module vanalis::marketplace {
 
     public struct MarketplaceListing has key {
         id: UID,
-        project_id: u64,
+        project_id: ID,
         dataset_hash: vector<u8>,
         dataset_object: address,
         price_sui: u64,
         price_usdc: u64,
         curator: address,
         seller: address,
-        full_dataset_blob_id: vector<u8>,
-        preview_blob_id: vector<u8>,
+        dataset_blob_id: vector<u8>,
         // metadata_hash: vector<u8>,
         active: bool,
         created_at: u64,
         updated_at: u64,
     }
 
+    public struct Dataset has key, store {
+        id: UID,
+        project_id: ID,
+        curator: address,
+        creator: address,
+        price_usdc: u64,
+        dataset_hash: vector<u8>,
+        dataset_blob_id: vector<u8>,
+        listed: bool,
+        created_at: u64,
+        last_sale_epoch: u64,
+    }
+
     public struct DatasetAccessToken has key, store {
         id: UID,
         dataset_hash: vector<u8>,
-        project_id: u64,
+        project_id: ID,
         buyer: address,
-        full_dataset_blob_id: vector<u8>,
-        preview_blob_id: vector<u8>,
+        dataset_blob_id: vector<u8>,
         // metadata_hash: vector<u8>,
         issued_at: u64,
     }
@@ -67,7 +81,7 @@ module vanalis::marketplace {
     // EVENTS
 
     public struct DatasetPurchasedEvent has copy, drop {
-        project_id: u64,
+        project_id: ID,
         dataset_hash: vector<u8>,
         dataset_object: address,
         buyer: address,
@@ -79,7 +93,7 @@ module vanalis::marketplace {
     }
 
     public struct ListingCreatedEvent has copy, drop {
-        project_id: u64,
+        project_id: ID,
         dataset_hash: vector<u8>,
         dataset_object: address,
         price_sui: u64,
@@ -117,34 +131,33 @@ public fun init_for_testing(ctx: &mut TxContext) {
     public fun create_listing(
         marketplace: &mut Marketplace,
         oracle: &pricing::PriceOracle,
-        dataset: &mut project::Dataset,
+        dataset: &mut Dataset,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
-        project::assert_dataset_owner(dataset, sender);
-        assert!(!project::is_dataset_listed(dataset), E_DATASET_ALREADY_LISTED);
+        assert_dataset_owner(dataset, sender);
+        assert!(!is_dataset_listed(dataset), E_DATASET_ALREADY_LISTED);
 
-        let dataset_hash = project::get_dataset_hash(dataset);
+        let dataset_hash = get_dataset_hash(dataset);
         let price_sui = pricing::require_price(oracle, copy dataset_hash);
         assert!(price_sui > 0, E_INVALID_PRICE);
 
-        // let (full_blob, preview_blob, metadata_hash) = project::get_dataset_blob_refs(dataset);
-        let (full_blob, preview_blob) = project::get_dataset_blob_refs(dataset);
-        let dataset_address = project::get_dataset_object_address(dataset);
+        // let (full_blob, preview_blob, metadata_hash) = get_dataset_blob_refs(dataset);
+        let dataset_blob_id = get_dataset_blob_ref(dataset);
+        let dataset_address = get_dataset_object_address(dataset);
 
-        project::mark_dataset_listed(dataset, true);
+        mark_dataset_listed(dataset, true);
 
         let listing = MarketplaceListing {
             id: object::new(ctx),
-            project_id: project::get_dataset_project(dataset),
+            project_id: get_dataset_project(dataset),
             dataset_hash: copy dataset_hash,
             dataset_object: dataset_address,
             price_sui,
-            price_usdc: project::get_dataset_price_usdc(dataset),
-            curator: project::get_dataset_curator(dataset),
+            price_usdc: get_dataset_price_usdc(dataset),
+            curator: get_dataset_curator(dataset),
             seller: sender,
-            full_dataset_blob_id: full_blob,
-            preview_blob_id: preview_blob,
+            dataset_blob_id: copy dataset_blob_id,
             // metadata_hash,
             active: true,
             created_at: tx_context::epoch(ctx),
@@ -175,16 +188,16 @@ public fun init_for_testing(ctx: &mut TxContext) {
         treasury: &mut Treasury,
         royalty_manager: &royalty::RoyaltyManager,
         accumulator: &mut royalty::RoyaltyAccumulator,
-        dataset: &mut project::Dataset,
+        dataset: &mut Dataset,
         listing: &mut MarketplaceListing,
         payment_coin: Coin<sui::sui::SUI>,
         ctx: &mut TxContext
     ) {
         assert!(listing.active, E_LISTING_INACTIVE);
-        assert!(project::is_dataset_listed(dataset), E_LISTING_INACTIVE);
+        assert!(is_dataset_listed(dataset), E_LISTING_INACTIVE);
 
         let listing_hash = copy listing.dataset_hash;
-        assert!(listing_hash == project::get_dataset_hash(dataset), E_DATASET_MISMATCH);
+        assert!(listing_hash == get_dataset_hash(dataset), E_DATASET_MISMATCH);
         assert!(listing_hash == royalty::get_dataset_hash(accumulator), E_DATASET_MISMATCH);
 
         let price = listing.price_sui;
@@ -217,8 +230,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
 
         listing.active = false;
         listing.updated_at = tx_context::epoch(ctx);
-        project::mark_dataset_listed(dataset, false);
-        project::touch_dataset_sale(dataset, listing.updated_at);
+        mark_dataset_listed(dataset, false);
+        touch_dataset_sale(dataset, listing.updated_at);
 
         let current_epoch = listing.updated_at;
         marketplace.access_tokens_issued = marketplace.access_tokens_issued + 1;
@@ -228,8 +241,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
             dataset_hash: listing_hash,
             project_id: listing.project_id,
             buyer: tx_context::sender(ctx),
-            full_dataset_blob_id: listing.full_dataset_blob_id,
-            preview_blob_id: listing.preview_blob_id,
+            dataset_blob_id: listing.dataset_blob_id,
             // metadata_hash: listing.metadata_hash,
             issued_at: current_epoch,
         };
@@ -283,7 +295,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
         (marketplace.total_datasets, marketplace.total_sales)
     }
 
-    public fun get_listing_info(listing: &MarketplaceListing): (u64, vector<u8>, address, u64, bool) {
+    public fun get_listing_info(listing: &MarketplaceListing): (ID, vector<u8>, address, u64, bool) {
         (listing.project_id, listing.dataset_hash, listing.dataset_object, listing.price_sui, listing.active)
     }
 
@@ -295,7 +307,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
         listing.active
     }
 
-    public fun access_token_project_id(token: &DatasetAccessToken): u64 {
+    public fun access_token_project_id(token: &DatasetAccessToken): ID {
         token.project_id
     }
 
@@ -304,5 +316,49 @@ public fun init_for_testing(ctx: &mut TxContext) {
         expected: vector<u8>
     ): bool {
         token.dataset_hash == expected
+    }
+
+    public fun assert_dataset_owner(dataset: &Dataset, signer: address) {
+        assert!(dataset.creator == signer, E_NOT_DATA_OWNER);
+    }
+
+    public fun is_dataset_listed(dataset: &Dataset): bool {
+        dataset.listed
+    }
+
+    public fun mark_dataset_listed(dataset: &mut Dataset, listed: bool) {
+        dataset.listed = listed;
+    }
+
+    public fun get_dataset_hash(dataset: &Dataset): vector<u8> {
+        copy dataset.dataset_hash
+    }
+
+    public fun get_dataset_price_usdc(dataset: &Dataset): u64 {
+        dataset.price_usdc
+    }
+
+    public fun get_dataset_project(dataset: &Dataset): ID {
+        dataset.project_id
+    }
+
+    public fun get_dataset_curator(dataset: &Dataset): address {
+        dataset.curator
+    }
+
+    public fun get_dataset_blob_ref(dataset: &Dataset): (vector<u8>) {
+        (copy dataset.dataset_blob_id)
+    }
+
+    public fun touch_dataset_sale(dataset: &mut Dataset, epoch: u64) {
+        dataset.last_sale_epoch = epoch;
+    }
+
+    public fun get_dataset_project_id(dataset: &Dataset): ID {
+        dataset.project_id
+    }
+
+    public fun get_dataset_object_address(dataset: &Dataset): address {
+        object::uid_to_address(&dataset.id)
     }
 }

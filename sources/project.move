@@ -4,6 +4,8 @@ module vanalis::project {
     use sui::coin::{Coin, Self};
     use sui::balance::{Self, Balance};
     use sui::table::{Self, Table};
+    use sui::object;
+    use sui::object::ID;
     use std::string;
     use std::string::String;
     use sui::clock::Clock;
@@ -32,12 +34,11 @@ module vanalis::project {
     public struct ProjectRegistry has key {
         id: UID,
         total_projects: u64,
-        projects: Table<u64, address>, // project_id -> creator address
+        projects: Table<ID, address>, // project_id -> creator address
     }
 
     public struct Project has key {
         id: UID,
-        project_id: u64,
         curator: address,
         title: String,
         description: String,
@@ -64,16 +65,15 @@ module vanalis::project {
 
     public struct Submission has key {
         id: UID,
-        submission_id: u64,
-        project_id: u64,
+        project_id: ID,
         contributor: address,
         
         // Walrus blob references
-        full_dataset_blob_id: vector<u8>,
         preview_blob_id: vector<u8>,
-        
+
+        full_dataset_path: String,
+        full_dataset_public_key: vector<u8>,
         status: u8,
-        
         reward_paid: u64,
         
         submitted_at: u64,
@@ -86,25 +86,10 @@ module vanalis::project {
         total_earned: u64,
     }
 
-    public struct Dataset has key, store {
-        id: UID,
-        project_id: u64,
-        submission_id: u64,
-        curator: address,
-        creator: address,
-        dataset_hash: vector<u8>,
-        price_usdc: u64,
-        full_dataset_blob_id: vector<u8>,
-        preview_blob_id: vector<u8>,
-        listed: bool,
-        created_at: u64,
-        last_sale_epoch: u64,
-    }
-
     // EVENTS
 
     public struct ProjectCreatedEvent has copy, drop {
-        project_id: u64,
+        project_id: ID,
         curator: address,
         title: String,
         description: String,
@@ -126,33 +111,35 @@ module vanalis::project {
     }
 
     public struct SubmissionReceivedEvent has copy, drop {
-        project_id: u64,
-        submission_id: u64,
+        project_id: ID,
+        submission_id: ID,
+        full_dataset_public_key: vector<u8>,
         contributor: address,
-        timestamp: u64,
+        submitted_at: u64,
     }
 
     public struct SubmissionReviewedEvent has copy, drop {
-        submission_id: u64,
+        project_id: ID,
+        submission_id: ID,
         approved: bool,
         reward_paid: u64,
-        timestamp: u64,
+        reviewed_at: u64,
     }
 
     /// Init project registry
-fun init(ctx: &mut TxContext) {
-    let registry = ProjectRegistry {
-        id: object::new(ctx),
-        total_projects: 0,
-        projects: table::new(ctx),
-    };
-    transfer::share_object(registry);
-}
+    fun init(ctx: &mut TxContext) {
+        let registry = ProjectRegistry {
+            id: object::new(ctx),
+            total_projects: 0,
+            projects: table::new(ctx),
+        };
+        transfer::share_object(registry);
+    }
 
-#[test_only]
-public fun init_for_testing(ctx: &mut TxContext) {
-    init(ctx);
-}
+    #[test_only]
+    public fun init_for_testing(ctx: &mut TxContext) {
+        init(ctx);
+    }
 
     public fun create_project(
         registry: &mut ProjectRegistry,
@@ -182,13 +169,12 @@ public fun init_for_testing(ctx: &mut TxContext) {
         
         assert!(reward_amount >= expected_total, E_INSUFFICIENT_REWARD_POOL);
 
-        let project_id = registry.total_projects + 1;
+        let total_projects = registry.total_projects + 1;
         let creator = tx_context::sender(ctx);
         let current_timestamp = clock.timestamp_ms();
 
         let project = Project {
             id: object::new(ctx),
-            project_id,
             curator: creator,
             title,
             description,
@@ -214,11 +200,11 @@ public fun init_for_testing(ctx: &mut TxContext) {
             deadline,
         };
 
-        registry.total_projects = project_id;
-        table::add(&mut registry.projects, project_id, creator);
+        registry.total_projects = total_projects;
+        table::add(&mut registry.projects, object::id(&project), creator);
 
         event::emit(ProjectCreatedEvent {
-            project_id,
+            project_id: object::id(&project),
             curator: creator,
             title: project.title,
             description: project.description,
@@ -242,40 +228,41 @@ public fun init_for_testing(ctx: &mut TxContext) {
     public fun submit_data(
         project: &mut Project,
         preview_blob_id: vector<u8>,
+        full_dataset_path: String,
+        full_dataset_public_key: vector<u8>,
         clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(tx_context::epoch(ctx) < project.deadline, E_DEADLINE_PASSED);
         
-        let submission_id = project.submissions_count + 1;
+        let submission_count = project.submissions_count + 1;
         let contributor = tx_context::sender(ctx);
         let current_timestamp = clock.timestamp_ms();
 
         let submission = Submission {
             id: object::new(ctx),
-            submission_id,
-            project_id: project.project_id,
+            project_id: object::id(project),
             contributor,
             
-            full_dataset_blob_id: b"",
             preview_blob_id,
-                        
+            full_dataset_path,
+            full_dataset_public_key,
             status: SUBMISSION_PENDING,
-            
             reward_paid: 0,
             
             submitted_at: current_timestamp,
             reviewed_at: 0,
         };
 
-        project.submissions_count = project.submissions_count + 1;
+        project.submissions_count = submission_count;
 
         event::emit(SubmissionReceivedEvent {
-            project_id: project.project_id,
-            submission_id,
+            project_id: object::id(project),
+            submission_id: object::id(&submission),
+            full_dataset_public_key: submission.full_dataset_public_key,
             contributor,
-            timestamp: current_timestamp,
+            submitted_at: current_timestamp,
         });
 
         if(table::contains(&project.contributor_stats, contributor)) {
@@ -308,6 +295,10 @@ public fun init_for_testing(ctx: &mut TxContext) {
         submission.reviewed_at = current_timestamp;
 
         let contributor = submission.contributor;
+        
+        // Extract IDs before mutable borrows
+        let project_id = object::id(project);
+        let submission_id = object::id(submission);
 
         if (!table::contains(&project.contributor_stats, contributor)) {
             let stats = ContributorStats {
@@ -335,10 +326,11 @@ public fun init_for_testing(ctx: &mut TxContext) {
             stats_ref.total_earned = stats_ref.total_earned + project.reward_per_submission;
 
             event::emit(SubmissionReviewedEvent {
-                submission_id: submission.submission_id,
+                project_id,
+                submission_id,
                 approved: true,
                 reward_paid: project.reward_per_submission,
-                timestamp: current_timestamp,
+                reviewed_at: current_timestamp,
             });
 
             if(project.target_submissions <= stats_ref.approved_count){
@@ -349,10 +341,11 @@ public fun init_for_testing(ctx: &mut TxContext) {
             project.rejected_count = project.rejected_count + 1;
 
             event::emit(SubmissionReviewedEvent {
-                submission_id: submission.submission_id,
+                project_id,
+                submission_id,
                 approved: false,
                 reward_paid: 0,
-                timestamp: current_timestamp,
+                reviewed_at: current_timestamp,
             });
         }
     }
@@ -405,8 +398,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         balance::value(&project.reward_pool)
     }
 
-    public fun get_project_id(project: &Project): u64 {
-        project.project_id
+    public fun get_project_id(project: &Project): ID {
+        object::id(project)
     }
 
     public fun get_curator(project: &Project): address {
@@ -417,56 +410,16 @@ public fun init_for_testing(ctx: &mut TxContext) {
         project.category
     }
 
-    public fun get_full_dataset_blob_id(submission: &Submission): vector<u8> {
-        submission.full_dataset_blob_id
+    public fun get_full_dataset_path(submission: &Submission): String {
+        submission.full_dataset_path
+    }
+
+    public fun get_full_dataset_public_key(submission: &Submission): vector<u8> {
+        submission.full_dataset_public_key
     }
 
     public fun get_preview_blob_id(submission: &Submission): vector<u8> {
         submission.preview_blob_id
-    }
-
-    public fun assert_dataset_owner(dataset: &Dataset, signer: address) {
-        assert!(dataset.creator == signer, E_NOT_DATA_OWNER);
-    }
-
-    public fun is_dataset_listed(dataset: &Dataset): bool {
-        dataset.listed
-    }
-
-    public fun mark_dataset_listed(dataset: &mut Dataset, listed: bool) {
-        dataset.listed = listed;
-    }
-
-    public fun get_dataset_hash(dataset: &Dataset): vector<u8> {
-        copy dataset.dataset_hash
-    }
-
-    public fun get_dataset_price_usdc(dataset: &Dataset): u64 {
-        dataset.price_usdc
-    }
-
-    public fun get_dataset_project(dataset: &Dataset): u64 {
-        dataset.project_id
-    }
-
-    public fun get_dataset_curator(dataset: &Dataset): address {
-        dataset.curator
-    }
-
-    public fun get_dataset_blob_refs(dataset: &Dataset): (vector<u8>, vector<u8>) {
-        (copy dataset.full_dataset_blob_id, copy dataset.preview_blob_id)
-    }
-
-    public fun touch_dataset_sale(dataset: &mut Dataset, epoch: u64) {
-        dataset.last_sale_epoch = epoch;
-    }
-
-    public fun get_dataset_submission(dataset: &Dataset): u64 {
-        dataset.submission_id
-    }
-
-    public fun get_dataset_object_address(dataset: &Dataset): address {
-        object::uid_to_address(&dataset.id)
     }
 
     public fun withdraw<T>(self: &mut Balance<T>, value: u64): Balance<T> {
