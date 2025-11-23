@@ -64,10 +64,10 @@ module vanalis::project {
         contributor: address,
         
         // Walrus blob references
-        preview_blob_id: vector<u8>,
+        preview_blob_id: String,
 
         full_dataset_path: String,
-        full_dataset_public_key: vector<u8>,
+        full_dataset_public_key: String,
         status: u8,
         reward_paid: u64,
         
@@ -107,7 +107,7 @@ module vanalis::project {
     public struct SubmissionReceivedEvent has copy, drop {
         project_id: ID,
         submission_id: ID,
-        full_dataset_public_key: vector<u8>,
+        full_dataset_public_key: String,
         contributor: address,
         submitted_at: u64,
     }
@@ -222,9 +222,9 @@ module vanalis::project {
 
     public fun submit_data(
         project: &mut Project,
-        preview_blob_id: vector<u8>,
+        preview_blob_id: String,
         full_dataset_path: String,
-        full_dataset_public_key: vector<u8>,
+        full_dataset_public_key: String,
         clock: &Clock,
         ctx: &mut TxContext
     ) {

@@ -6,6 +6,8 @@ module vanalis::treasury {
   use vanalis::project;
 
   const E_NOT_PLATFORM_OWNER: u64 = 3001;
+  const E_INSUFFICIENT_BALANCE: u64 = 3002;
+  const E_NOT_TREASURY_OWNER: u64 = 3003;
 
   public struct PlatformTreasury has key {
     id: UID,
@@ -23,8 +25,7 @@ module vanalis::treasury {
   public struct Treasury has key, store {
     id: UID,
     owner: address,
-    contributor_balance: Balance<sui::sui::SUI>,
-    curator_balance: Balance<sui::sui::SUI>,
+    balance: Balance<sui::sui::SUI>,
     total_contributor_collected: u64,
     total_curator_collected: u64,
   }
@@ -71,8 +72,7 @@ module vanalis::treasury {
     let treasury = Treasury {
       id: object::new(ctx),
       owner,
-      contributor_balance: balance::zero(),
-      curator_balance: balance::zero(),
+      balance: balance::zero(),
       total_contributor_collected: 0,
       total_curator_collected: 0,
     };
@@ -90,7 +90,7 @@ module vanalis::treasury {
     let coin_balance = coin::into_balance(coin);
     let coin_value = balance::value(&coin_balance);
 
-    balance::join(&mut treasury.contributor_balance, coin_balance);
+    balance::join(&mut treasury.balance, coin_balance);
 
     treasury.total_contributor_collected = treasury.total_contributor_collected + coin_value;
     platform.total_contributor_collected = platform.total_contributor_collected + coin_value;
@@ -120,7 +120,7 @@ module vanalis::treasury {
     // Update curator balance & total curator collected
     let treasury = get_treasury(platform, curator_address, ctx);
     let curator_balance = coin::into_balance(curator_fee_coin);
-    balance::join(&mut treasury.curator_balance, curator_balance);
+    balance::join(&mut treasury.balance, curator_balance);
     treasury.total_curator_collected = treasury.total_curator_collected + curator_fee;
     platform.total_curator_collected = platform.total_curator_collected + curator_fee;
 
@@ -168,5 +168,57 @@ module vanalis::treasury {
       balance::join(&mut platform.platform_balance, contributor_balance);
       platform.total_platform_collected = platform.total_platform_collected + remaining_contributor_coin_value;
     };
+  }
+
+  /// Withdraw all platform balance
+  public fun withdraw_platform_all(platform: &mut PlatformTreasury, ctx: &mut TxContext): Coin<sui::sui::SUI> {
+    assert!(tx_context::sender(ctx) == platform.platform_owner, E_NOT_PLATFORM_OWNER);
+    
+    let balance_value = balance::value(&platform.platform_balance);
+    assert!(balance_value > 0, E_INSUFFICIENT_BALANCE);
+    
+    let withdrawn_balance = balance::split(&mut platform.platform_balance, balance_value);
+    coin::from_balance(withdrawn_balance, ctx)
+  }
+
+  /// Withdraw specific amount from platform balance
+  public fun withdraw_platform(platform: &mut PlatformTreasury, amount: u64, ctx: &mut TxContext): Coin<sui::sui::SUI> {
+    assert!(tx_context::sender(ctx) == platform.platform_owner, E_NOT_PLATFORM_OWNER);
+    
+    let balance_value = balance::value(&platform.platform_balance);
+    assert!(balance_value >= amount, E_INSUFFICIENT_BALANCE);
+    assert!(amount > 0, E_INSUFFICIENT_BALANCE);
+    
+    let withdrawn_balance = balance::split(&mut platform.platform_balance, amount);
+    coin::from_balance(withdrawn_balance, ctx)
+  }
+
+  /// Withdraw all balance from user's Treasury
+  public fun withdraw_user_all(platform: &mut PlatformTreasury, ctx: &mut TxContext): Coin<sui::sui::SUI> {
+    let owner = tx_context::sender(ctx);
+    let treasury = get_treasury(platform, owner, ctx);
+    
+    assert!(treasury.owner == owner, E_NOT_TREASURY_OWNER);
+    
+    let balance_value = balance::value(&treasury.balance);
+    assert!(balance_value > 0, E_INSUFFICIENT_BALANCE);
+    
+    let withdrawn_balance = balance::split(&mut treasury.balance, balance_value);
+    coin::from_balance(withdrawn_balance, ctx)
+  }
+
+  /// Withdraw specific amount from user's Treasury
+  public fun withdraw_user(platform: &mut PlatformTreasury, amount: u64, ctx: &mut TxContext): Coin<sui::sui::SUI> {
+    let owner = tx_context::sender(ctx);
+    let treasury = get_treasury(platform, owner, ctx);
+    
+    assert!(treasury.owner == owner, E_NOT_TREASURY_OWNER);
+    
+    let balance_value = balance::value(&treasury.balance);
+    assert!(balance_value >= amount, E_INSUFFICIENT_BALANCE);
+    assert!(amount > 0, E_INSUFFICIENT_BALANCE);
+    
+    let withdrawn_balance = balance::split(&mut treasury.balance, amount);
+    coin::from_balance(withdrawn_balance, ctx)
   }
 }

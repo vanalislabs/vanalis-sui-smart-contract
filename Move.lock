@@ -49,11 +49,17 @@ flavor = "sui"
 
 [env]
 
-[env.devnet] # by Jun
-chain-id = "dac402e1"
-original-published-id = "0xf2e8b21a4c68052c00b70083fa63887c2c78d19c06b49cfe62a798b000e28431"
-latest-published-id = "0xf2e8b21a4c68052c00b70083fa63887c2c78d19c06b49cfe62a798b000e28431"
+[env.testnet]
+chain-id = "4c78adac"
+original-published-id = "0xb42deee313a03b4789b3968e127174586a128d7432af5383ff992d29e7a35606"
+latest-published-id = "0xb42deee313a03b4789b3968e127174586a128d7432af5383ff992d29e7a35606"
 published-version = "1"
+
+# [env.devnet] # by Jun
+# chain-id = "dac402e1"
+# original-published-id = "0xf2e8b21a4c68052c00b70083fa63887c2c78d19c06b49cfe62a798b000e28431"
+# latest-published-id = "0xf2e8b21a4c68052c00b70083fa63887c2c78d19c06b49cfe62a798b000e28431"
+# published-version = "1"
 
 # [env.devnet] # by Vinsa
 # chain-id = "dac402e1"
