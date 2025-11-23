@@ -6,6 +6,7 @@ module vanalis::marketplace {
     use sui::object;
     use sui::object::ID;
     use sui::table::{Self, Table};
+    use std::string::String;
     use sui::clock::Clock;
 
     use vanalis::project;
@@ -25,8 +26,8 @@ module vanalis::marketplace {
         id: UID,
         project_id: ID,
         price: u64,
-        dataset_collection_blob_id: vector<u8>,
-        dataset_collection_public_key: vector<u8>,
+        dataset_collection_blob_id: String,
+        dataset_collection_public_key: String,
         last_sale_epoch_timestamp: u64,
         total_sales_amount: u64,
         total_sales_count: u64,
@@ -49,8 +50,8 @@ module vanalis::marketplace {
         id: ID,
         project_id: ID,
         price: u64,
-        dataset_collection_blob_id: vector<u8>,
-        dataset_collection_public_key: vector<u8>,
+        dataset_collection_blob_id: String,
+        dataset_collection_public_key: String,
         last_sale_epoch_timestamp: u64,
         created_at: u64,
     }
@@ -76,8 +77,8 @@ module vanalis::marketplace {
         marketplace: &mut Marketplace,
         project: &mut project::Project,
         price: u64,
-        dataset_collection_blob_id: vector<u8>,
-        dataset_collection_public_key: vector<u8>,
+        dataset_collection_blob_id: String,
+        dataset_collection_public_key: String,
         last_sale_epoch_timestamp: u64,
         clock: &Clock,
         ctx: &mut TxContext

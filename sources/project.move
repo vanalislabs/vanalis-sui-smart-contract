@@ -6,7 +6,6 @@ module vanalis::project {
     use sui::table::{Self, Table};
     use std::string;
     use std::string::String;
-    use std::vector;
     use sui::clock::Clock;
 
     const E_INVALID_STATUS: u64 = 1002;
@@ -91,10 +90,11 @@ module vanalis::project {
         data_type: String,
         category: String,
         image_url: String,
-        reward_pool: u64,
+
+        total_reward_pool: u64,
+        reward_per_submission: u64,
         
         target_submissions: u64,
-        
         status: u8,
         submissions_count: u64,
         approved_count: u64,
@@ -207,7 +207,8 @@ module vanalis::project {
             data_type: project.data_type,
             category: project.category,
             image_url: project.image_url,
-            reward_pool: reward_amount,
+            total_reward_pool: reward_amount,
+            reward_per_submission: project.reward_per_submission,
             target_submissions,
             status: project.status,
             submissions_count: project.submissions_count,
