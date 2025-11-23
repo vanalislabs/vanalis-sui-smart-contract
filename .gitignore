@@ -1,5 +1,6 @@
-build/*
+build
 .trace
 .coverage*
 
 notes
+Move.lock
