@@ -122,6 +122,7 @@ module vanalis::treasury {
     let curator_balance = coin::into_balance(curator_fee_coin);
     balance::join(&mut treasury.curator_balance, curator_balance);
     treasury.total_curator_collected = treasury.total_curator_collected + curator_fee;
+    platform.total_curator_collected = platform.total_curator_collected + curator_fee;
 
     // Distribute contributor fee to contributors based on approved submissions
     let total_approved_count = project::get_approved_count(project);
