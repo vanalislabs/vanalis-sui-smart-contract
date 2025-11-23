@@ -6,6 +6,8 @@ module vanalis::marketplace {
     use sui::object;
     use sui::object::ID;
     use vanalis::project;
+    use vanalis::royalty;
+    use vanalis::pricing;
 
     const E_INVALID_PRICE: u64 = 1;
     const E_INSUFFICIENT_PAYMENT: u64 = 2;
@@ -19,6 +21,7 @@ module vanalis::marketplace {
         total_datasets: u64,
         total_sales: u64,
         platform_fee_percent: u8,
+        access_tokens_issued: u64,
     }
 
     public struct Treasury has key {
@@ -42,6 +45,7 @@ module vanalis::marketplace {
         dataset_hash: vector<u8>,
         dataset_object: address,
         price_sui: u64,
+        price_usdc: u64,
         curator: address,
         seller: address,
         dataset_blob_id: vector<u8>,
@@ -93,6 +97,7 @@ module vanalis::marketplace {
         dataset_hash: vector<u8>,
         dataset_object: address,
         price_sui: u64,
+        price_usdc: u64,
         curator: address,
         seller: address,
         timestamp: u64,
@@ -104,6 +109,7 @@ fun init(ctx: &mut TxContext) {
         total_datasets: 0,
         total_sales: 0,
         platform_fee_percent: 5,
+        access_tokens_issued: 0,
     };
 
     let treasury = Treasury {
@@ -165,6 +171,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
             dataset_hash,
             dataset_object: dataset_address,
             price_sui,
+            price_usdc: listing.price_usdc,
             curator: listing.curator,
             seller: sender,
             timestamp: tx_context::epoch(ctx),
@@ -210,6 +217,14 @@ public fun init_for_testing(ctx: &mut TxContext) {
             transfer::public_transfer(change_coin, tx_context::sender(ctx));
         };
 
+        royalty::distribute_royalties(
+            royalty_manager,
+            accumulator,
+            &mut treasury.balance,
+            sale_coin,
+            ctx
+        );
+
         treasury.total_collected = treasury.total_collected + platform_share;
         marketplace.total_sales = marketplace.total_sales + 1;
 
@@ -219,6 +234,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
         touch_dataset_sale(dataset, listing.updated_at);
 
         let current_epoch = listing.updated_at;
+        marketplace.access_tokens_issued = marketplace.access_tokens_issued + 1;
 
         let token = DatasetAccessToken {
             id: object::new(ctx),
