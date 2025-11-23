@@ -56,6 +56,17 @@ module vanalis::marketplace {
         created_at: u64,
     }
 
+    public struct DatasetPurchasedEvent has copy, drop {
+        sale_id: ID,
+        listing_id: ID,
+        project_id: ID,
+        buyer: address,
+        paid_amount: u64,
+        dataset_collection_blob_id: String,
+        dataset_collection_public_key: String,
+        bought_at: u64,
+    }
+
     fun init(ctx: &mut TxContext) {
         let marketplace = Marketplace {
             id: object::new(ctx),
@@ -144,16 +155,29 @@ module vanalis::marketplace {
         assert!(!table::contains(&listing.sales, buyer), E_ALREADY_PURCHASED);
 
         let correct_coin = coin::split(&mut payment_coin, listing.price, ctx);
+        let bought_at = clock.timestamp_ms();
 
         let sale = Sale {
             id: object::new(ctx),
             listing_id: object::id(listing),
             buyer,
             paid_amount: listing.price,
-            bought_at: clock.timestamp_ms(),
+            bought_at,
         };
+        let sale_id = object::id(&sale);
 
         table::add(&mut listing.sales, tx_context::sender(ctx), sale);
+
+        event::emit(DatasetPurchasedEvent {
+            sale_id,
+            listing_id: object::id(listing),
+            project_id: listing.project_id,
+            buyer,
+            paid_amount: listing.price,
+            dataset_collection_blob_id: listing.dataset_collection_blob_id,
+            dataset_collection_public_key: listing.dataset_collection_public_key,
+            bought_at,
+        });
 
         // Update listing total sales amount and count
         listing.total_sales_amount = listing.total_sales_amount + listing.price;
