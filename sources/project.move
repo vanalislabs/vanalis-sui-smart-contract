@@ -4,28 +4,22 @@ module vanalis::project {
     use sui::coin::{Coin, Self};
     use sui::balance::{Self, Balance};
     use sui::table::{Self, Table};
-    use sui::object;
-    use sui::object::ID;
     use std::string;
     use std::string::String;
+    use std::vector;
     use sui::clock::Clock;
-    use vanalis::royalty;
 
-    const E_NOT_CREATOR: u64 = 1;
-    const E_INVALID_STATUS: u64 = 2;
-    const E_PROJECT_NOT_OPEN: u64 = 3;
-    const E_INSUFFICIENT_REWARD_POOL: u64 = 4;
-    const E_NOT_CURATOR: u64 = 5;
-    const E_DEADLINE_PASSED: u64 = 6;
-    const E_INVALID_AMOUNT: u64 = 7;
-    const E_INVALID_ADDRESS: u64 = 8;
-    const E_NOT_DATA_OWNER: u64 = 9;
-    const E_DATASET_ALREADY_LISTED: u64 = 10;
+    const E_INVALID_STATUS: u64 = 1002;
+    const E_PROJECT_NOT_OPEN: u64 = 1003;
+    const E_INSUFFICIENT_REWARD_POOL: u64 = 1004;
+    const E_NOT_CURATOR: u64 = 1005;
+    const E_DEADLINE_PASSED: u64 = 1006;
+    const E_INVALID_AMOUNT: u64 = 1007;
+    const E_DEADLINE_ALREADY_PASSED: u64 = 1008;
     
-    const STATUS_DRAFT: u8 = 0;
+    const STATUS_COMING_SOON: u8 = 0;
     const STATUS_OPEN: u8 = 1;
     const STATUS_COMPLETED: u8 = 2;
-    const STATUS_PUBLISHED: u8 = 3;
 
     const SUBMISSION_PENDING: u8 = 0;
     const SUBMISSION_APPROVED: u8 = 1;
@@ -58,6 +52,7 @@ module vanalis::project {
         approved_count: u64,
         rejected_count: u64,
         contributor_stats: Table<address, ContributorStats>,
+        contributors: vector<address>,
         
         created_at: u64,
         deadline: u64,
@@ -87,7 +82,6 @@ module vanalis::project {
     }
 
     // EVENTS
-
     public struct ProjectCreatedEvent has copy, drop {
         project_id: ID,
         curator: address,
@@ -195,6 +189,7 @@ module vanalis::project {
             approved_count: 0,
             rejected_count: 0,
             contributor_stats: table::new<address, ContributorStats>(ctx),
+            contributors: vector::empty<address>(),
             
             created_at: current_timestamp,            
             deadline,
@@ -277,6 +272,21 @@ module vanalis::project {
             table::add(&mut project.contributor_stats, contributor, stats);
         };
 
+        // Add contributor to vector if not already present
+        let mut found = false;
+        let len = vector::length(&project.contributors);
+        let mut i = 0;
+        while (i < len) {
+            if (*vector::borrow(&project.contributors, i) == contributor) {
+                found = true;
+                break
+            };
+            i = i + 1;
+        };
+        if (!found) {
+            vector::push_back(&mut project.contributors, contributor);
+        };
+
         transfer::share_object(submission);
     }
 
@@ -287,11 +297,13 @@ module vanalis::project {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        let current_timestamp = clock.timestamp_ms();
+
+        assert!(current_timestamp <= project.deadline, E_DEADLINE_ALREADY_PASSED);
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
         assert!(submission.status == SUBMISSION_PENDING, E_INVALID_STATUS);
 
-        let current_timestamp = clock.timestamp_ms();
         submission.reviewed_at = current_timestamp;
 
         let contributor = submission.contributor;
@@ -366,64 +378,50 @@ module vanalis::project {
         project.status = STATUS_COMPLETED; 
     }
 
-    // GET FUNCTION
+    public fun withdraw<T>(self: &mut Balance<T>, value: u64): Balance<T> {
+        balance::split(self, value)
+    }
 
-    public fun get_project_status(project: &Project): u8 {
+    // Public getter functions for marketplace access
+    public fun get_status(project: &Project): u8 {
         project.status
-    }
-
-    public fun get_submission_status(submission: &Submission): u8 {
-        submission.status
-    }
-
-    public fun get_project_info(project: &Project): (String, u64, u64, u64) {
-        (
-            // project.data_type_hash,
-            project.category,
-            project.submissions_count,
-            project.approved_count,
-            project.total_reward_pool,
-        )
-    }
-
-    public fun get_contributor_stats(stats: &ContributorStats): (u64, u64, u64) {
-        (stats.submissions_count, stats.approved_count, stats.total_earned)
-    }
-
-    public fun get_submission_info(submission: &Submission): (address, u64, u8) {
-        (submission.contributor, submission.reward_paid, submission.status)
-    }
-
-    public fun get_reward_pool_balance(project: &Project): u64 {
-        balance::value(&project.reward_pool)
-    }
-
-    public fun get_project_id(project: &Project): ID {
-        object::id(project)
     }
 
     public fun get_curator(project: &Project): address {
         project.curator
     }
 
-    public fun get_category(project: &Project): String {
-        project.category
+    public fun get_deadline(project: &Project): u64 {
+        project.deadline
     }
 
-    public fun get_full_dataset_path(submission: &Submission): String {
-        submission.full_dataset_path
+    public fun status_coming_soon(): u8 {
+        STATUS_COMING_SOON
     }
 
-    public fun get_full_dataset_public_key(submission: &Submission): vector<u8> {
-        submission.full_dataset_public_key
+    public fun status_open(): u8 {
+        STATUS_OPEN
     }
 
-    public fun get_preview_blob_id(submission: &Submission): vector<u8> {
-        submission.preview_blob_id
+    public fun status_completed(): u8 {
+        STATUS_COMPLETED
     }
 
-    public fun withdraw<T>(self: &mut Balance<T>, value: u64): Balance<T> {
-        balance::split(self, value)
+    // Getter functions for treasury/marketplace access
+    public fun get_approved_count(project: &Project): u64 {
+        project.approved_count
     }
 
+    public fun get_contributor_approved_count(project: &Project, contributor: address): u64 {
+        if (table::contains(&project.contributor_stats, contributor)) {
+            let stats = table::borrow(&project.contributor_stats, contributor);
+            stats.approved_count
+        } else {
+            0
+        }
+    }
+
+    public fun get_contributors(project: &Project): vector<address> {
+        project.contributors
+    }
 }
