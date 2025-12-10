@@ -56,7 +56,7 @@ module vanalis::marketplace {
         created_at: u64,
     }
 
-    public struct DatasetPurchasedEvent has copy, drop {
+    public struct ListingPurchasedEvent has copy, drop {
         sale_id: ID,
         listing_id: ID,
         project_id: ID,
@@ -168,7 +168,7 @@ module vanalis::marketplace {
 
         table::add(&mut listing.sales, tx_context::sender(ctx), sale);
 
-        event::emit(DatasetPurchasedEvent {
+        event::emit(ListingPurchasedEvent {
             sale_id,
             listing_id: object::id(listing),
             project_id: listing.project_id,
