@@ -448,4 +448,8 @@ module vanalis::project {
     public fun get_contributors(project: &Project): vector<address> {
         project.contributors
     }
+
+    public fun set_is_listed(project: &mut Project, isListed: bool) {
+        project.isListed = isListed;
+    }
 }
