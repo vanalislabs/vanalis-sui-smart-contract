@@ -125,6 +125,10 @@ module vanalis::project {
         reviewed_at: u64,
     }
 
+    public struct ProjectClosedEvent has copy, drop {
+        project_id: ID,
+    }
+
     /// Init project registry
     fun init(ctx: &mut TxContext) {
         let registry = ProjectRegistry {
@@ -379,6 +383,7 @@ module vanalis::project {
         ctx: &mut TxContext
     ) {
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
+        assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         
         let remaining = balance::value(&project.reward_pool);
         assert!(remaining > 0, E_INVALID_AMOUNT);
@@ -386,7 +391,11 @@ module vanalis::project {
         let remaining_coin = withdraw(&mut project.reward_pool, remaining);
         let withdraw_coin = coin::from_balance(remaining_coin, ctx);
         transfer::public_transfer(withdraw_coin, project.curator);
-        project.status = STATUS_COMPLETED; 
+        project.status = STATUS_CLOSED;
+        
+        event::emit(ProjectClosedEvent {
+            project_id: object::id(project),
+        }) 
     }
 
     public fun withdraw<T>(self: &mut Balance<T>, value: u64): Balance<T> {
@@ -416,6 +425,10 @@ module vanalis::project {
 
     public fun status_completed(): u8 {
         STATUS_COMPLETED
+    }
+    
+    public fun status_closed(): u8 {
+        STATUS_CLOSED
     }
 
     // Getter functions for treasury/marketplace access

@@ -57,6 +57,13 @@ module vanalis::marketplace {
         created_at: u64,
     }
 
+    public struct ListingUpdatedEvent has copy, drop {
+        id: ID,
+        price: u64,
+        last_sale_epoch_timestamp: u64,
+        updated_at: u64,
+    }
+
     public struct ListingPurchasedEvent has copy, drop {
         sale_id: ID,
         listing_id: ID,
@@ -95,24 +102,17 @@ module vanalis::marketplace {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let current_timestamp = clock.timestamp_ms();
         let project_status = project::get_status(project);
-        let project_curator = project::get_curator(project);
-        let project_deadline = project::get_deadline(project);
         let total_listings = marketplace.total_listings + 1;
         
         assert!(
             project_status == project::status_completed() 
-            || (
-                project_status == project::status_open() 
-                && project_curator == tx_context::sender(ctx) 
-                && current_timestamp <= project_deadline
-            ), 
+            || project_status == project::status_closed(), 
             E_PROJECT_NOT_COMPLETED
         );
         assert!(price > 0, E_INVALID_AMOUNT);
         assert!(!string::is_empty(&dataset_collection_blob_id), E_INVALID_AMOUNT);
-
+        assert!(!string::is_empty(&dataset_collection_public_key), E_INVALID_AMOUNT);
 
         let curator = tx_context::sender(ctx);
 
@@ -144,6 +144,28 @@ module vanalis::marketplace {
         marketplace.total_listings = total_listings;
 
         transfer::share_object(listing);
+    }
+
+    public fun update_listing(
+        listing: &mut MarketplaceListing,
+        last_sale_epoch_timestamp: u64,
+        price: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(price > 0, E_INVALID_AMOUNT);
+        assert!(last_sale_epoch_timestamp > listing.last_sale_epoch_timestamp, E_INVALID_AMOUNT);
+        assert!(tx_context::sender(ctx) == listing.curator, E_INVALID_AMOUNT);
+
+        listing.price = price;
+        listing.last_sale_epoch_timestamp = last_sale_epoch_timestamp;
+        listing.updated_at = clock.timestamp_ms();
+        event::emit(ListingUpdatedEvent {
+            id: object::id(listing),
+            price,
+            last_sale_epoch_timestamp,
+            updated_at: clock.timestamp_ms(),
+        })
     }
 
     public fun purchase(
@@ -185,6 +207,10 @@ module vanalis::marketplace {
             dataset_collection_public_key: listing.dataset_collection_public_key,
             bought_at,
         });
+
+        // Update Marketplace Stats
+        marketplace.total_sales_amount = marketplace.total_sales_amount + listing.price;
+        marketplace.total_sales_count = marketplace.total_sales_count + 1;
 
         // Update listing total sales amount and count
         listing.total_sales_amount = listing.total_sales_amount + listing.price;
