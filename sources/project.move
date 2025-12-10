@@ -450,6 +450,10 @@ module vanalis::project {
     }
 
     public fun set_is_listed(project: &mut Project, isListed: bool) {
-        project.isListed = isListed;
+        project.isListed = isListed
+    }
+
+    public fun get_has_dataset(project: &Project): bool {
+        project.hasDataset
     }
 }

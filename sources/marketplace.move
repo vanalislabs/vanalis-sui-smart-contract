@@ -110,7 +110,7 @@ module vanalis::marketplace {
             || project_status == project::status_closed(), 
             E_PROJECT_NOT_COMPLETED
         );
-        assert!(project.hasDataset, E_INVALID_AMOUNT);
+        assert!(project::get_has_dataset(project), E_INVALID_AMOUNT);
         assert!(price > 0, E_INVALID_AMOUNT);
         assert!(!string::is_empty(&dataset_collection_blob_id), E_INVALID_AMOUNT);
         assert!(!string::is_empty(&dataset_collection_public_key), E_INVALID_AMOUNT);
