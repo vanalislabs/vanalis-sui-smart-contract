@@ -6,6 +6,7 @@ module vanalis::marketplace {
     use sui::object;
     use sui::object::ID;
     use sui::table::{Self, Table};
+    use std::string;
     use std::string::String;
     use sui::clock::Clock;
 
@@ -56,7 +57,7 @@ module vanalis::marketplace {
         created_at: u64,
     }
 
-    public struct DatasetPurchasedEvent has copy, drop {
+    public struct ListingPurchasedEvent has copy, drop {
         sale_id: ID,
         listing_id: ID,
         project_id: ID,
@@ -98,6 +99,7 @@ module vanalis::marketplace {
         let project_status = project::get_status(project);
         let project_curator = project::get_curator(project);
         let project_deadline = project::get_deadline(project);
+        let total_listings = marketplace.total_listings + 1;
         
         assert!(
             project_status == project::status_completed() 
@@ -108,6 +110,9 @@ module vanalis::marketplace {
             ), 
             E_PROJECT_NOT_COMPLETED
         );
+        assert!(price > 0, E_INVALID_AMOUNT);
+        assert!(!string::is_empty(&dataset_collection_blob_id), E_INVALID_AMOUNT);
+
 
         let curator = tx_context::sender(ctx);
 
@@ -135,6 +140,8 @@ module vanalis::marketplace {
             last_sale_epoch_timestamp: last_sale_epoch_timestamp,
             created_at: clock.timestamp_ms(),
         });
+
+        marketplace.total_listings = total_listings;
 
         transfer::share_object(listing);
     }
@@ -168,7 +175,7 @@ module vanalis::marketplace {
 
         table::add(&mut listing.sales, tx_context::sender(ctx), sale);
 
-        event::emit(DatasetPurchasedEvent {
+        event::emit(ListingPurchasedEvent {
             sale_id,
             listing_id: object::id(listing),
             project_id: listing.project_id,

@@ -19,6 +19,7 @@ module vanalis::project {
     const STATUS_COMING_SOON: u8 = 0;
     const STATUS_OPEN: u8 = 1;
     const STATUS_COMPLETED: u8 = 2;
+    const STATUS_CLOSED: u8 = 3;
 
     const SUBMISSION_PENDING: u8 = 0;
     const SUBMISSION_APPROVED: u8 = 1;
@@ -52,6 +53,8 @@ module vanalis::project {
         rejected_count: u64,
         contributor_stats: Table<address, ContributorStats>,
         contributors: vector<address>,
+        isListed: bool,
+        hasDataset: bool,
         
         created_at: u64,
         deadline: u64,
@@ -99,6 +102,8 @@ module vanalis::project {
         submissions_count: u64,
         approved_count: u64,
         rejected_count: u64,
+        isListed: bool,
+        hasDataset: bool,
         
         created_at: u64,
         deadline: u64,
@@ -190,6 +195,8 @@ module vanalis::project {
             rejected_count: 0,
             contributor_stats: table::new<address, ContributorStats>(ctx),
             contributors: vector::empty<address>(),
+            isListed: false,
+            hasDataset: false,
             
             created_at: current_timestamp,            
             deadline,
@@ -214,6 +221,8 @@ module vanalis::project {
             submissions_count: project.submissions_count,
             approved_count: project.approved_count,
             rejected_count: project.rejected_count,
+            isListed: project.isListed,
+            hasDataset: project.hasDataset,
             created_at: current_timestamp,
             deadline,
         });
@@ -229,12 +238,13 @@ module vanalis::project {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        let current_timestamp = clock.timestamp_ms();
+
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
-        assert!(tx_context::epoch(ctx) < project.deadline, E_DEADLINE_PASSED);
-        
+        assert!(current_timestamp <= project.deadline, E_DEADLINE_ALREADY_PASSED);
+
         let submission_count = project.submissions_count + 1;
         let contributor = tx_context::sender(ctx);
-        let current_timestamp = clock.timestamp_ms();
 
         let submission = Submission {
             id: object::new(ctx),
@@ -300,7 +310,6 @@ module vanalis::project {
     ) {
         let current_timestamp = clock.timestamp_ms();
 
-        assert!(current_timestamp <= project.deadline, E_DEADLINE_ALREADY_PASSED);
         assert!(project.status == STATUS_OPEN, E_PROJECT_NOT_OPEN);
         assert!(project.curator == tx_context::sender(ctx), E_NOT_CURATOR);
         assert!(submission.status == SUBMISSION_PENDING, E_INVALID_STATUS);
@@ -325,6 +334,7 @@ module vanalis::project {
 
         if (approve) {
             submission.status = SUBMISSION_APPROVED;
+            project.hasDataset = true;
 
             let reward_coin = withdraw(&mut project.reward_pool, project.reward_per_submission);
             let collected_coin = coin::from_balance(reward_coin, ctx);
